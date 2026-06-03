@@ -1,0 +1,57 @@
+seed: 42
+output_dir: outputs/default
+
+data:
+  train_manifest: data/train.jsonl
+  val_manifest: data/val.jsonl
+  test_manifest: data/test.jsonl
+  image_root: .
+  max_caption_length: 96
+  num_workers: 4
+
+knowledge:
+  ontology_path: data/ontology/railway_terms.yaml
+  enforce_terms: true
+  hallucination_check: true
+
+model:
+  # Good starting point for a lightweight baseline. Replace with local models if offline.
+  vision_encoder: google/vit-base-patch16-224-in21k
+  text_decoder: distilgpt2
+  pretrained_vision_encoder_decoder: null
+  freeze_vision_encoder: false
+  use_lora: false
+  generation:
+    max_new_tokens: 80
+    num_beams: 3
+    no_repeat_ngram_size: 3
+
+train:
+  epochs: 3
+  batch_size: 8
+  learning_rate: 5.0e-5
+  weight_decay: 0.01
+  grad_accum_steps: 1
+  mixed_precision: true
+  log_every: 20
+  save_every_epoch: true
+
+distillation:
+  enabled: false
+  teacher_checkpoint: null
+  alpha_ce: 0.7
+  alpha_kl: 0.3
+  temperature: 2.0
+
+compression:
+  quantize_dynamic: false
+  export_onnx: false
+  onnx_path: outputs/default/model.onnx
+
+eval:
+  batch_size: 8
+  metrics:
+    - equipment_recall
+    - fault_f1
+    - risk_accuracy
+    - hallucination_rate

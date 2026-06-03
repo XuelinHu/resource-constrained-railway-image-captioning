@@ -1,0 +1,41 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "railcap"
+version = "0.1.0"
+description = "Knowledge-guided lightweight image captioning for railway inspection scenarios."
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+  "pillow>=10.0.0",
+  "pyyaml>=6.0.1",
+  "torch>=2.1.0",
+  "transformers>=4.40.0",
+  "tqdm>=4.66.0",
+]
+
+[project.optional-dependencies]
+dev = [
+  "pytest>=8.0.0",
+  "ruff>=0.4.0",
+]
+
+[project.scripts]
+railcap-train = "railcap.train:main"
+railcap-predict = "railcap.predict:main"
+railcap-evaluate = "railcap.evaluate:main"
+railcap-benchmark = "railcap.benchmark:main"
+railcap-build-manifest = "railcap.data.build_manifest:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py310"
+
+[tool.pytest.ini_options]
+pythonpath = ["src"]
+testpaths = ["tests"]
