@@ -1,5 +1,14 @@
 # 受限资源下的铁道知识图片描述
 
+<p align="center">
+  <img height="20" src="https://img.shields.io/badge/python-3.10%2B-3776AB?logo=python&amp;logoColor=white" />
+  <img height="20" src="https://img.shields.io/badge/pytorch-2.1%2B-EE4C2C?logo=pytorch&amp;logoColor=white" />
+  <img height="20" src="https://img.shields.io/badge/transformers-4.40%2B-FFD21E?logo=huggingface&amp;logoColor=black" />
+  <img height="20" src="https://img.shields.io/badge/pillow-10.0%2B-345995" />
+  <img height="20" src="https://img.shields.io/badge/pytest-8.0%2B-0A9EDC?logo=pytest&amp;logoColor=white" />
+  <img height="20" src="https://img.shields.io/badge/ruff-0.4%2B-D7FF64?logo=ruff&amp;logoColor=black" />
+</p>
+
 这是一个用于论文实验的代码框架，目标是支撑：
 
 - 铁路专用图文数据集构建
