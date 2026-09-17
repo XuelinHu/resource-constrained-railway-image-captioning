@@ -1,0 +1,936 @@
+<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><title>资源受限铁道知识图片描述软件 V1.0 源代码</title><style>@page{size:A4;margin:15mm 14mm 12mm}*{box-sizing:border-box}body{font-family:"Noto Sans CJK SC","Microsoft YaHei",Arial,sans-serif;color:#17272b;background:#fff;font-size:9.4pt;line-height:1.25;margin:0;padding:0}.page-break{break-before:page;break-after:avoid;height:0}h1{font-size:20pt;text-align:center;margin:0 0 8mm;color:#17343a}h2{font-size:14.5pt;margin:7mm 0 3mm;color:#1d5b66;border-bottom:1pt solid #91aeb2;padding-bottom:1.5mm;break-after:avoid}h3{font-size:11.5pt;margin:4mm 0 1.5mm;color:#285760;break-after:avoid}p{margin:2mm 0;text-align:justify}blockquote{border-left:3pt solid #91aeb2;margin:3mm 0;padding:2mm 4mm;color:#49656a}table{width:100%;border-collapse:collapse;border-top:1pt solid #17343a;border-bottom:1pt solid #17343a;margin:3mm 0 4mm;break-inside:auto}thead{display:table-header-group}th{border-bottom:0.7pt solid #17343a;font-weight:700}th,td{padding:1.5mm 2mm;vertical-align:top;text-align:left}tr{break-inside:avoid}pre{font-family:"Noto Sans Mono CJK SC",Consolas,monospace;white-space:pre-wrap;overflow-wrap:anywhere;background:#fff;border:0.5pt solid #9aaeb1;padding:2.5mm;margin:2mm 0;font-size:8.7pt;line-height:1.24}code{font-family:"Noto Sans Mono CJK SC",Consolas,monospace}img{display:block;max-width:100%;max-height:118mm;margin:3mm auto;object-fit:contain}ul,ol{padding-left:7mm}.toc{list-style:none;padding-left:0}.toc li{display:flex;gap:3mm;border-bottom:0.3pt dotted #a9b9ba;padding:1.2mm 0}.toc a{flex:1;color:#17343a}.toc-page{min-width:18mm;text-align:right;color:#49656a}.cover{min-height:250mm;display:flex;flex-direction:column;justify-content:center;align-items:center}.cover-meta{width:150mm;border-top:1pt solid #1d5b66;border-bottom:1pt solid #1d5b66;padding:5mm;margin-top:8mm}.cover-meta p{margin:1.5mm 0}.body{color:#000}h1,h2,h3{color:#000;border-color:#000}table{border-color:#000}th{border-color:#000}blockquote{border-color:#000;color:#000}.pdf-header{color:#000;font-size:7pt;white-space:nowrap;overflow:hidden}pre{border-color:#000}body:before{border-color:#000}.cover-meta{border-color:#000}a{color:#000}</style></head><body><div class="cover"><h1>资源受限铁道知识图片描述软件源代码</h1><div class="cover-meta"><p>软件名称：资源受限铁道知识图片描述软件 V1.0 </p><p>版本号：V1.0</p><p>文档类型：源代码</p></div></div>
+<h2 id="">目录</h2>
+<p>1. src/railcap/__init__.py</p>
+<p>2. src/railcap/benchmark.py</p>
+<p>3. src/railcap/config.py</p>
+<p>4. src/railcap/evaluate.py</p>
+<p>5. src/railcap/knowledge/__init__.py</p>
+<p>6. src/railcap/knowledge/constraints.py</p>
+<p>7. src/railcap/knowledge/ontology.py</p>
+<p>8. src/railcap/metrics/__init__.py</p>
+<p>9. src/railcap/metrics/domain_metrics.py</p>
+<p>10. src/railcap/models/__init__.py</p>
+<p>11. src/railcap/models/compression.py</p>
+<p>12. src/railcap/models/distillation.py</p>
+<p>13. src/railcap/models/modeling.py</p>
+<p>14. src/railcap/predict.py</p>
+<p>15. src/railcap/train.py</p>
+<p>16. src/railcap/utils/__init__.py</p>
+<p>17. src/railcap/utils/runtime.py</p>
+<p>18. pyproject.toml</p>
+<p>19. configs/default.yaml</p>
+<p>20. tests/test_domain_metrics.py</p>
+<p>21. tests/test_ontology.py</p>
+<div class="page-break"></div>
+<h3>src/railcap/__init__.py</h3>
+<pre>&quot;&quot;&quot;Railway knowledge-guided lightweight image captioning.&quot;&quot;&quot;
+
+__version__ = &quot;0.1.0&quot;
+</pre>
+<h3>src/railcap/benchmark.py</h3>
+<pre>from __future__ import annotations
+
+import argparse
+import json
+import time
+from pathlib import Path
+
+import torch
+from torch.utils.data import DataLoader
+from transformers import AutoImageProcessor, AutoTokenizer, VisionEncoderDecoderModel
+
+from railcap.config import load_config
+from railcap.data.dataset import RailwayCaptionDataset
+from railcap.train import collate_batch
+from railcap.utils.runtime import cuda_memory_mb, pick_device
+
+
+def parse_args() -&gt; argparse.Namespace:
+    parser = argparse.ArgumentParser(description=&quot;Benchmark caption generation latency.&quot;)
+    parser.add_argument(&quot;--config&quot;, default=&quot;configs/default.yaml&quot;, type=Path)
+    parser.add_argument(&quot;--checkpoint&quot;, type=Path, help=&quot;Model checkpoint directory.&quot;)
+    parser.add_argument(&quot;--manifest&quot;, type=Path, help=&quot;Override benchmark manifest.&quot;)
+    parser.add_argument(&quot;--warmup&quot;, type=int, default=3)
+    parser.add_argument(&quot;--steps&quot;, type=int, default=20)
+    return parser.parse_args()
+
+
+def main() -&gt; None:
+    args = parse_args()
+    cfg = load_config(args.config)
+    raw = cfg.raw
+
+    checkpoint = args.checkpoint or (cfg.output_dir / &quot;final&quot;)
+    manifest_path = args.manifest or Path(raw[&quot;data&quot;][&quot;test_manifest&quot;])
+    device = pick_device()
+
+    image_processor = AutoImageProcessor.from_pretrained(checkpoint)
+    tokenizer = AutoTokenizer.from_pretrained(checkpoint)
+    model = VisionEncoderDecoderModel.from_pretrained(checkpoint).to(device)
+    model.eval()
+
+    dataset = RailwayCaptionDataset(
+        manifest_path,
+        image_root=raw[&quot;data&quot;].get(&quot;image_root&quot;, &quot;.&quot;),
+        image_processor=image_processor,
+        tokenizer=None,
+    )
+    loader = DataLoader(
+        dataset,
+        batch_size=int(raw.get(&quot;eval&quot;, {}).get(&quot;batch_size&quot;, 8)),
+        shuffle=False,
+        num_workers=0,
+        collate_fn=collate_batch,
+    )
+
+    generation_kwargs = dict(raw.get(&quot;model&quot;, {}).get(&quot;generation&quot;, {}))
+    timings: list[float] = []
+    images = 0
+
+    with torch.no_grad():
+        for step, batch in enumerate(loader):
+            if step &gt;= args.warmup + args.steps:
+                break
+            pixel_values = batch[&quot;pixel_values&quot;].to(device)
+            if device.type == &quot;cuda&quot;:
+                torch.cuda.synchronize()
+            start = time.perf_counter()
+            generated_ids = model.generate(pixel_values=pixel_values, **generation_kwargs)
+            tokenizer.batch_decode(generated_ids, skip_special_tokens=True)
+            if device.type == &quot;cuda&quot;:
+                torch.cuda.synchronize()
+            elapsed = time.perf_counter() - start
+            if step &gt;= args.warmup:
+                timings.append(elapsed)
+                images += pixel_values.shape[0]
+
+    total_time = sum(timings)
+    result = {
+        &quot;device&quot;: str(device),
+        &quot;steps&quot;: len(timings),
+        &quot;images&quot;: images,
+        &quot;batch_size&quot;: int(raw.get(&quot;eval&quot;, {}).get(&quot;batch_size&quot;, 8)),
+        &quot;latency_ms_per_batch&quot;: (total_time / len(timings) * 1000) if timings else 0.0,
+        &quot;latency_ms_per_image&quot;: (total_time / images * 1000) if images else 0.0,
+        &quot;throughput_img_s&quot;: (images / total_time) if total_time else 0.0,
+        &quot;cuda_max_memory_mb&quot;: cuda_memory_mb(),
+    }
+    print(json.dumps(result, ensure_ascii=False, indent=2))
+
+
+if __name__ == &quot;__main__&quot;:
+    main()
+</pre>
+<h3>src/railcap/config.py</h3>
+<pre>from __future__ import annotations
+
+from dataclasses import dataclass
+from pathlib import Path
+from typing import Any
+
+import yaml
+
+
+@dataclass(frozen=True)
+class ExperimentConfig:
+    raw: dict[str, Any]
+    path: Path
+
+    @property
+    def output_dir(self) -&gt; Path:
+        return Path(self.raw.get(&quot;output_dir&quot;, &quot;outputs/default&quot;))
+
+
+def load_config(path: str | Path) -&gt; ExperimentConfig:
+    config_path = Path(path)
+    with config_path.open(&quot;r&quot;, encoding=&quot;utf-8&quot;) as f:
+        raw = yaml.safe_load(f) or {}
+    return ExperimentConfig(raw=raw, path=config_path)
+
+
+def get_nested(config: dict[str, Any], dotted_key: str, default: Any = None) -&gt; Any:
+    current: Any = config
+    for key in dotted_key.split(&quot;.&quot;):
+        if not isinstance(current, dict) or key not in current:
+            return default
+        current = current[key]
+    return current
+</pre>
+<h3>src/railcap/evaluate.py</h3>
+<pre>from __future__ import annotations
+
+import argparse
+import json
+from pathlib import Path
+
+from railcap.config import load_config
+from railcap.data.dataset import load_manifest
+from railcap.knowledge.ontology import RailwayOntology
+from railcap.metrics.domain_metrics import compute_domain_metrics
+
+
+def load_predictions(path: str | Path) -&gt; list[str]:
+    predictions: list[str] = []
+    with Path(path).open(&quot;r&quot;, encoding=&quot;utf-8&quot;) as f:
+        for line_no, line in enumerate(f, start=1):
+            line = line.strip()
+            if not line:
+                continue
+            item = json.loads(line)
+            if &quot;prediction&quot; not in item:
+                raise ValueError(f&quot;{path}:{line_no}: missing prediction field&quot;)
+            predictions.append(str(item[&quot;prediction&quot;]))
+    return predictions
+
+
+def parse_args() -&gt; argparse.Namespace:
+    parser = argparse.ArgumentParser(description=&quot;Evaluate railway caption predictions.&quot;)
+    parser.add_argument(&quot;--config&quot;, default=&quot;configs/default.yaml&quot;, type=Path)
+    parser.add_argument(&quot;--manifest&quot;, type=Path, help=&quot;Override test manifest path.&quot;)
+    parser.add_argument(&quot;--predictions&quot;, required=True, type=Path)
+    return parser.parse_args()
+
+
+def main() -&gt; None:
+    args = parse_args()
+    cfg = load_config(args.config)
+    raw = cfg.raw
+
+    manifest_path = args.manifest or Path(raw[&quot;data&quot;][&quot;test_manifest&quot;])
+    samples = load_manifest(manifest_path)
+    predictions = load_predictions(args.predictions)
+    ontology = RailwayOntology.from_yaml(raw[&quot;knowledge&quot;][&quot;ontology_path&quot;])
+
+    metrics = compute_domain_metrics(samples, predictions, ontology)
+    print(json.dumps(metrics.as_dict(), ensure_ascii=False, indent=2))
+
+
+if __name__ == &quot;__main__&quot;:
+    main()
+</pre>
+<h3>src/railcap/knowledge/__init__.py</h3>
+<pre>&quot;&quot;&quot;Railway domain knowledge utilities.&quot;&quot;&quot;
+</pre>
+<h3>src/railcap/knowledge/constraints.py</h3>
+<pre>from __future__ import annotations
+
+from dataclasses import dataclass
+
+from railcap.data.schema import CaptionSample
+from railcap.knowledge.ontology import RailwayOntology
+
+
+@dataclass(frozen=True)
+class CaptionKnowledgeReport:
+    expected_terms: set[str]
+    mentioned_terms: set[str]
+    missing_terms: set[str]
+    hallucinated_terms: set[str]
+
+    @property
+    def has_hallucination(self) -&gt; bool:
+        return bool(self.hallucinated_terms)
+
+
+def expected_terms_from_sample(sample: CaptionSample) -&gt; set[str]:
+    return set(sample.equipment) | set(sample.faults) | set(sample.risks)
+
+
+def analyze_caption(
+    sample: CaptionSample,
+    generated_caption: str,
+    ontology: RailwayOntology,
+) -&gt; CaptionKnowledgeReport:
+    expected = {ontology.canonicalize(term) for term in expected_terms_from_sample(sample)}
+    mentioned = ontology.extract_terms(generated_caption)
+    ontology_terms = ontology.canonical_terms
+
+    return CaptionKnowledgeReport(
+        expected_terms=expected,
+        mentioned_terms=mentioned,
+        missing_terms=expected - mentioned,
+        hallucinated_terms=(mentioned - expected) &amp; ontology_terms,
+    )
+
+
+def build_generation_prefix(sample: CaptionSample) -&gt; str:
+    parts: list[str] = []
+    if sample.equipment:
+        parts.append(&quot;设备：&quot; + &quot;、&quot;.join(sample.equipment))
+    if sample.faults:
+        parts.append(&quot;异常：&quot; + &quot;、&quot;.join(sample.faults))
+    if sample.risks:
+        parts.append(&quot;风险：&quot; + &quot;、&quot;.join(sample.risks))
+    if not parts:
+        return &quot;请描述铁路巡检图像：&quot;
+    return &quot;；&quot;.join(parts) + &quot;。请生成专业、准确、无臆测的铁路图像描述：&quot;
+</pre>
+<h3>src/railcap/knowledge/ontology.py</h3>
+<pre>from __future__ import annotations
+
+from dataclasses import dataclass
+from pathlib import Path
+
+import yaml
+
+
+@dataclass(frozen=True)
+class RailwayOntology:
+    equipment: tuple[str, ...]
+    faults: tuple[str, ...]
+    risks: tuple[str, ...]
+    aliases: dict[str, tuple[str, ...]]
+
+    @classmethod
+    def from_yaml(cls, path: str | Path) -&gt; &quot;RailwayOntology&quot;:
+        with Path(path).open(&quot;r&quot;, encoding=&quot;utf-8&quot;) as f:
+            raw = yaml.safe_load(f) or {}
+
+        aliases = {
+            str(term): tuple(str(alias) for alias in values)
+            for term, values in (raw.get(&quot;aliases&quot;) or {}).items()
+        }
+        return cls(
+            equipment=tuple(str(x) for x in raw.get(&quot;equipment&quot;, [])),
+            faults=tuple(str(x) for x in raw.get(&quot;faults&quot;, [])),
+            risks=tuple(str(x) for x in raw.get(&quot;risks&quot;, [])),
+            aliases=aliases,
+        )
+
+    @property
+    def canonical_terms(self) -&gt; set[str]:
+        return set(self.equipment) | set(self.faults) | set(self.risks)
+
+    @property
+    def all_surface_terms(self) -&gt; set[str]:
+        terms = set(self.canonical_terms)
+        for values in self.aliases.values():
+            terms.update(values)
+        return terms
+
+    def canonicalize(self, term: str) -&gt; str:
+        if term in self.canonical_terms:
+            return term
+        for canonical, aliases in self.aliases.items():
+            if term in aliases:
+                return canonical
+        return term
+
+    def extract_terms(self, text: str) -&gt; set[str]:
+        found: set[str] = set()
+        for term in self.all_surface_terms:
+            if term and term in text:
+                found.add(self.canonicalize(term))
+        return found
+</pre>
+<h3>src/railcap/metrics/__init__.py</h3>
+<pre>&quot;&quot;&quot;Evaluation metrics for railway captioning.&quot;&quot;&quot;
+</pre>
+<h3>src/railcap/metrics/domain_metrics.py</h3>
+<pre>from __future__ import annotations
+
+from dataclasses import dataclass
+
+from railcap.data.schema import CaptionSample
+from railcap.knowledge.constraints import analyze_caption
+from railcap.knowledge.ontology import RailwayOntology
+
+
+@dataclass(frozen=True)
+class DomainMetrics:
+    equipment_recall: float
+    fault_precision: float
+    fault_recall: float
+    fault_f1: float
+    risk_accuracy: float
+    hallucination_rate: float
+
+    def as_dict(self) -&gt; dict[str, float]:
+        return {
+            &quot;equipment_recall&quot;: self.equipment_recall,
+            &quot;fault_precision&quot;: self.fault_precision,
+            &quot;fault_recall&quot;: self.fault_recall,
+            &quot;fault_f1&quot;: self.fault_f1,
+            &quot;risk_accuracy&quot;: self.risk_accuracy,
+            &quot;hallucination_rate&quot;: self.hallucination_rate,
+        }
+
+
+def _safe_div(numerator: float, denominator: float) -&gt; float:
+    return numerator / denominator if denominator else 0.0
+
+
+def compute_domain_metrics(
+    samples: list[CaptionSample],
+    predictions: list[str],
+    ontology: RailwayOntology,
+) -&gt; DomainMetrics:
+    if len(samples) != len(predictions):
+        raise ValueError(&quot;samples and predictions must have the same length&quot;)
+
+    equipment_hits = 0
+    equipment_total = 0
+    fault_tp = 0
+    fault_fp = 0
+    fault_fn = 0
+    risk_hits = 0
+    risk_total = 0
+    hallucinated = 0
+
+    for sample, prediction in zip(samples, predictions, strict=True):
+        mentioned = ontology.extract_terms(prediction)
+
+        expected_equipment = {ontology.canonicalize(x) for x in sample.equipment}
+        equipment_hits += len(expected_equipment &amp; mentioned)
+        equipment_total += len(expected_equipment)
+
+        expected_faults = {ontology.canonicalize(x) for x in sample.faults}
+        predicted_faults = mentioned &amp; set(ontology.faults)
+        fault_tp += len(expected_faults &amp; predicted_faults)
+        fault_fp += len(predicted_faults - expected_faults)
+        fault_fn += len(expected_faults - predicted_faults)
+
+        expected_risks = {ontology.canonicalize(x) for x in sample.risks}
+        if expected_risks:
+            risk_total += 1
+            if expected_risks &amp; mentioned:
+                risk_hits += 1
+
+        report = analyze_caption(sample, prediction, ontology)
+        hallucinated += int(report.has_hallucination)
+
+    fault_precision = _safe_div(fault_tp, fault_tp + fault_fp)
+    fault_recall = _safe_div(fault_tp, fault_tp + fault_fn)
+    fault_f1 = _safe_div(2 * fault_precision * fault_recall, fault_precision + fault_recall)
+
+    return DomainMetrics(
+        equipment_recall=_safe_div(equipment_hits, equipment_total),
+        fault_precision=fault_precision,
+        fault_recall=fault_recall,
+        fault_f1=fault_f1,
+        risk_accuracy=_safe_div(risk_hits, risk_total),
+        hallucination_rate=_safe_div(hallucinated, len(samples)),
+    )
+</pre>
+<h3>src/railcap/models/__init__.py</h3>
+<pre>&quot;&quot;&quot;Model builders and compression helpers.&quot;&quot;&quot;
+</pre>
+<h3>src/railcap/models/compression.py</h3>
+<pre>from __future__ import annotations
+
+from pathlib import Path
+from typing import Any
+
+import torch
+
+
+def apply_dynamic_quantization(model: torch.nn.Module) -&gt; torch.nn.Module:
+    return torch.quantization.quantize_dynamic(
+        model,
+        {torch.nn.Linear},
+        dtype=torch.qint8,
+    )
+
+
+def export_onnx_placeholder(model: torch.nn.Module, output_path: str | Path, example_batch: Any) -&gt; None:
+    path = Path(output_path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    raise NotImplementedError(
+        &quot;ONNX export needs a fixed model/input signature. Add an example pixel_values batch &quot;
+        f&quot;and decoder inputs before exporting to {path}.&quot;
+    )
+</pre>
+<h3>src/railcap/models/distillation.py</h3>
+<pre>from __future__ import annotations
+
+import torch
+import torch.nn.functional as F
+
+
+def distillation_kl_loss(
+    student_logits: torch.Tensor,
+    teacher_logits: torch.Tensor,
+    temperature: float = 2.0,
+) -&gt; torch.Tensor:
+    student_log_probs = F.log_softmax(student_logits / temperature, dim=-1)
+    teacher_probs = F.softmax(teacher_logits / temperature, dim=-1)
+    return F.kl_div(student_log_probs, teacher_probs, reduction=&quot;batchmean&quot;) * temperature**2
+
+
+def combined_distillation_loss(
+    ce_loss: torch.Tensor,
+    student_logits: torch.Tensor,
+    teacher_logits: torch.Tensor,
+    alpha_ce: float = 0.7,
+    alpha_kl: float = 0.3,
+    temperature: float = 2.0,
+) -&gt; torch.Tensor:
+    kl_loss = distillation_kl_loss(student_logits, teacher_logits, temperature)
+    return alpha_ce * ce_loss + alpha_kl * kl_loss
+</pre>
+<h3>src/railcap/models/modeling.py</h3>
+<pre>from __future__ import annotations
+
+from typing import Any
+
+import torch
+from transformers import (
+    AutoImageProcessor,
+    AutoTokenizer,
+    VisionEncoderDecoderModel,
+    VisionEncoderDecoderConfig,
+)
+
+
+def build_processors(config: dict[str, Any]) -&gt; tuple[Any, Any]:
+    model_cfg = config[&quot;model&quot;]
+    if model_cfg.get(&quot;pretrained_vision_encoder_decoder&quot;):
+        name = model_cfg[&quot;pretrained_vision_encoder_decoder&quot;]
+        image_processor = AutoImageProcessor.from_pretrained(name)
+        tokenizer = AutoTokenizer.from_pretrained(name)
+    else:
+        image_processor = AutoImageProcessor.from_pretrained(model_cfg[&quot;vision_encoder&quot;])
+        tokenizer = AutoTokenizer.from_pretrained(model_cfg[&quot;text_decoder&quot;])
+
+    if tokenizer.pad_token is None:
+        tokenizer.pad_token = tokenizer.eos_token
+    return image_processor, tokenizer
+
+
+def build_model(config: dict[str, Any], tokenizer: Any) -&gt; VisionEncoderDecoderModel:
+    model_cfg = config[&quot;model&quot;]
+    pretrained = model_cfg.get(&quot;pretrained_vision_encoder_decoder&quot;)
+
+    if pretrained:
+        model = VisionEncoderDecoderModel.from_pretrained(pretrained)
+    else:
+        decoder_name = model_cfg[&quot;text_decoder&quot;]
+        model = VisionEncoderDecoderModel.from_encoder_decoder_pretrained(
+            model_cfg[&quot;vision_encoder&quot;],
+            decoder_name,
+        )
+
+    model.config.decoder_start_token_id = tokenizer.bos_token_id or tokenizer.eos_token_id
+    model.config.eos_token_id = tokenizer.eos_token_id
+    model.config.pad_token_id = tokenizer.pad_token_id
+    model.config.vocab_size = model.config.decoder.vocab_size
+
+    generation_cfg = model_cfg.get(&quot;generation&quot;, {})
+    for key, value in generation_cfg.items():
+        setattr(model.generation_config, key, value)
+
+    if model_cfg.get(&quot;freeze_vision_encoder&quot;, False):
+        for parameter in model.encoder.parameters():
+            parameter.requires_grad = False
+
+    return model
+
+
+def count_parameters(model: torch.nn.Module) -&gt; dict[str, int]:
+    total = sum(parameter.numel() for parameter in model.parameters())
+    trainable = sum(parameter.numel() for parameter in model.parameters() if parameter.requires_grad)
+    return {&quot;total&quot;: total, &quot;trainable&quot;: trainable}
+
+
+def empty_vision_encoder_decoder_config() -&gt; VisionEncoderDecoderConfig:
+    return VisionEncoderDecoderConfig()
+</pre>
+<h3>src/railcap/predict.py</h3>
+<pre>from __future__ import annotations
+
+import argparse
+import json
+from pathlib import Path
+from typing import Any
+
+import torch
+from torch.utils.data import DataLoader
+from tqdm import tqdm
+from transformers import AutoImageProcessor, AutoTokenizer, VisionEncoderDecoderModel
+
+from railcap.config import load_config
+from railcap.data.dataset import RailwayCaptionDataset
+from railcap.train import collate_batch
+from railcap.utils.runtime import ensure_dir, pick_device
+
+
+def parse_args() -&gt; argparse.Namespace:
+    parser = argparse.ArgumentParser(description=&quot;Generate railway image captions.&quot;)
+    parser.add_argument(&quot;--config&quot;, default=&quot;configs/default.yaml&quot;, type=Path)
+    parser.add_argument(&quot;--checkpoint&quot;, type=Path, help=&quot;Model checkpoint directory.&quot;)
+    parser.add_argument(&quot;--manifest&quot;, type=Path, help=&quot;Override manifest path.&quot;)
+    parser.add_argument(&quot;--output&quot;, type=Path, help=&quot;Output JSONL path.&quot;)
+    return parser.parse_args()
+
+
+def _generation_kwargs(config: dict[str, Any]) -&gt; dict[str, Any]:
+    return dict(config.get(&quot;model&quot;, {}).get(&quot;generation&quot;, {}))
+
+
+def main() -&gt; None:
+    args = parse_args()
+    cfg = load_config(args.config)
+    raw = cfg.raw
+
+    checkpoint = args.checkpoint or (cfg.output_dir / &quot;final&quot;)
+    if not checkpoint.exists():
+        raise FileNotFoundError(f&quot;checkpoint not found: {checkpoint}&quot;)
+
+    manifest_path = args.manifest or Path(raw[&quot;data&quot;][&quot;test_manifest&quot;])
+    output_path = args.output or (cfg.output_dir / &quot;predictions.jsonl&quot;)
+    ensure_dir(output_path.parent)
+
+    image_processor = AutoImageProcessor.from_pretrained(checkpoint)
+    tokenizer = AutoTokenizer.from_pretrained(checkpoint)
+    model = VisionEncoderDecoderModel.from_pretrained(checkpoint)
+    device = pick_device()
+    model.to(device)
+    model.eval()
+
+    dataset = RailwayCaptionDataset(
+        manifest_path,
+        image_root=raw[&quot;data&quot;].get(&quot;image_root&quot;, &quot;.&quot;),
+        image_processor=image_processor,
+        tokenizer=None,
+    )
+    loader = DataLoader(
+        dataset,
+        batch_size=int(raw.get(&quot;eval&quot;, {}).get(&quot;batch_size&quot;, 8)),
+        shuffle=False,
+        num_workers=int(raw[&quot;data&quot;].get(&quot;num_workers&quot;, 4)),
+        collate_fn=collate_batch,
+    )
+
+    generation_kwargs = _generation_kwargs(raw)
+    with output_path.open(&quot;w&quot;, encoding=&quot;utf-8&quot;) as f, torch.no_grad():
+        for batch in tqdm(loader, desc=&quot;predict&quot;):
+            pixel_values = batch[&quot;pixel_values&quot;].to(device)
+            generated_ids = model.generate(pixel_values=pixel_values, **generation_kwargs)
+            captions = tokenizer.batch_decode(generated_ids, skip_special_tokens=True)
+            for sample, prediction in zip(batch[&quot;samples&quot;], captions, strict=True):
+                record = {
+                    &quot;image&quot;: sample.image,
+                    &quot;prediction&quot;: prediction.strip(),
+                    &quot;reference&quot;: sample.caption,
+                    &quot;equipment&quot;: sample.equipment,
+                    &quot;faults&quot;: sample.faults,
+                    &quot;risks&quot;: sample.risks,
+                }
+                f.write(json.dumps(record, ensure_ascii=False) + &quot;\n&quot;)
+
+    print(f&quot;wrote predictions to {output_path}&quot;)
+
+
+if __name__ == &quot;__main__&quot;:
+    main()
+</pre>
+<h3>src/railcap/train.py</h3>
+<pre>from __future__ import annotations
+
+import argparse
+from pathlib import Path
+from typing import Any
+
+import torch
+from torch.utils.data import DataLoader
+from tqdm import tqdm
+
+from railcap.config import load_config
+from railcap.data.dataset import RailwayCaptionDataset
+from railcap.models.modeling import build_model, build_processors, count_parameters
+from railcap.utils.runtime import ensure_dir, pick_device, set_seed
+
+
+def collate_batch(batch: list[dict[str, Any]]) -&gt; dict[str, Any]:
+    output: dict[str, Any] = {
+        &quot;samples&quot;: [item[&quot;sample&quot;] for item in batch],
+        &quot;captions&quot;: [item[&quot;caption&quot;] for item in batch],
+    }
+    tensor_keys = [&quot;pixel_values&quot;, &quot;labels&quot;, &quot;decoder_attention_mask&quot;]
+    for key in tensor_keys:
+        if key in batch[0]:
+            output[key] = torch.stack([item[key] for item in batch])
+    return output
+
+
+def parse_args() -&gt; argparse.Namespace:
+    parser = argparse.ArgumentParser(description=&quot;Train railway image captioning model.&quot;)
+    parser.add_argument(&quot;--config&quot;, default=&quot;configs/default.yaml&quot;, type=Path)
+    return parser.parse_args()
+
+
+def main() -&gt; None:
+    args = parse_args()
+    cfg = load_config(args.config)
+    raw = cfg.raw
+    set_seed(int(raw.get(&quot;seed&quot;, 42)))
+    output_dir = ensure_dir(cfg.output_dir)
+
+    image_processor, tokenizer = build_processors(raw)
+    model = build_model(raw, tokenizer)
+    device = pick_device()
+    model.to(device)
+
+    params = count_parameters(model)
+    print(f&quot;parameters total={params['total']:,} trainable={params['trainable']:,}&quot;)
+
+    data_cfg = raw[&quot;data&quot;]
+    train_dataset = RailwayCaptionDataset(
+        data_cfg[&quot;train_manifest&quot;],
+        image_root=data_cfg.get(&quot;image_root&quot;, &quot;.&quot;),
+        image_processor=image_processor,
+        tokenizer=tokenizer,
+        max_caption_length=int(data_cfg.get(&quot;max_caption_length&quot;, 96)),
+    )
+    train_loader = DataLoader(
+        train_dataset,
+        batch_size=int(raw[&quot;train&quot;].get(&quot;batch_size&quot;, 8)),
+        shuffle=True,
+        num_workers=int(data_cfg.get(&quot;num_workers&quot;, 4)),
+        collate_fn=collate_batch,
+    )
+
+    optimizer = torch.optim.AdamW(
+        (parameter for parameter in model.parameters() if parameter.requires_grad),
+        lr=float(raw[&quot;train&quot;].get(&quot;learning_rate&quot;, 5e-5)),
+        weight_decay=float(raw[&quot;train&quot;].get(&quot;weight_decay&quot;, 0.01)),
+    )
+
+    use_amp = bool(raw[&quot;train&quot;].get(&quot;mixed_precision&quot;, True)) and device.type == &quot;cuda&quot;
+    scaler = torch.cuda.amp.GradScaler(enabled=use_amp)
+    grad_accum_steps = int(raw[&quot;train&quot;].get(&quot;grad_accum_steps&quot;, 1))
+    log_every = int(raw[&quot;train&quot;].get(&quot;log_every&quot;, 20))
+
+    model.train()
+    global_step = 0
+    for epoch in range(int(raw[&quot;train&quot;].get(&quot;epochs&quot;, 3))):
+        progress = tqdm(train_loader, desc=f&quot;epoch {epoch + 1}&quot;)
+        optimizer.zero_grad(set_to_none=True)
+        for step, batch in enumerate(progress, start=1):
+            pixel_values = batch[&quot;pixel_values&quot;].to(device)
+            labels = batch[&quot;labels&quot;].to(device)
+
+            with torch.cuda.amp.autocast(enabled=use_amp):
+                outputs = model(pixel_values=pixel_values, labels=labels)
+                loss = outputs.loss / grad_accum_steps
+
+            scaler.scale(loss).backward()
+            if step % grad_accum_steps == 0:
+                scaler.step(optimizer)
+                scaler.update()
+                optimizer.zero_grad(set_to_none=True)
+                global_step += 1
+
+            if global_step and global_step % log_every == 0:
+                progress.set_postfix(loss=f&quot;{loss.item() * grad_accum_steps:.4f}&quot;)
+
+        if raw[&quot;train&quot;].get(&quot;save_every_epoch&quot;, True):
+            checkpoint_dir = output_dir / f&quot;checkpoint-epoch-{epoch + 1}&quot;
+            model.save_pretrained(checkpoint_dir)
+            tokenizer.save_pretrained(checkpoint_dir)
+            image_processor.save_pretrained(checkpoint_dir)
+
+    final_dir = output_dir / &quot;final&quot;
+    model.save_pretrained(final_dir)
+    tokenizer.save_pretrained(final_dir)
+    image_processor.save_pretrained(final_dir)
+    print(f&quot;saved model to {final_dir}&quot;)
+
+
+if __name__ == &quot;__main__&quot;:
+    main()
+</pre>
+<h3>src/railcap/utils/__init__.py</h3>
+<pre>&quot;&quot;&quot;Runtime utilities.&quot;&quot;&quot;
+</pre>
+<h3>src/railcap/utils/runtime.py</h3>
+<pre>from __future__ import annotations
+
+import random
+from pathlib import Path
+
+import torch
+
+
+def set_seed(seed: int) -&gt; None:
+    random.seed(seed)
+    torch.manual_seed(seed)
+    torch.cuda.manual_seed_all(seed)
+
+
+def ensure_dir(path: str | Path) -&gt; Path:
+    directory = Path(path)
+    directory.mkdir(parents=True, exist_ok=True)
+    return directory
+
+
+def pick_device() -&gt; torch.device:
+    return torch.device(&quot;cuda&quot; if torch.cuda.is_available() else &quot;cpu&quot;)
+
+
+def cuda_memory_mb() -&gt; float:
+    if not torch.cuda.is_available():
+        return 0.0
+    return torch.cuda.max_memory_allocated() / 1024 / 1024
+</pre>
+<h3>pyproject.toml</h3>
+<pre>[build-system]
+requires = [&quot;setuptools&gt;=68&quot;, &quot;wheel&quot;]
+build-backend = &quot;setuptools.build_meta&quot;
+
+[project]
+name = &quot;railcap&quot;
+version = &quot;0.1.0&quot;
+description = &quot;Knowledge-guided lightweight image captioning for railway inspection scenarios.&quot;
+readme = &quot;README.md&quot;
+requires-python = &quot;&gt;=3.10&quot;
+dependencies = [
+  &quot;pillow&gt;=10.0.0&quot;,
+  &quot;pyyaml&gt;=6.0.1&quot;,
+  &quot;torch&gt;=2.1.0&quot;,
+  &quot;transformers&gt;=4.40.0&quot;,
+  &quot;tqdm&gt;=4.66.0&quot;,
+]
+
+[project.optional-dependencies]
+dev = [
+  &quot;pytest&gt;=8.0.0&quot;,
+  &quot;ruff&gt;=0.4.0&quot;,
+]
+
+[project.scripts]
+railcap-train = &quot;railcap.train:main&quot;
+railcap-predict = &quot;railcap.predict:main&quot;
+railcap-evaluate = &quot;railcap.evaluate:main&quot;
+railcap-benchmark = &quot;railcap.benchmark:main&quot;
+railcap-build-manifest = &quot;railcap.data.build_manifest:main&quot;
+
+[tool.setuptools.packages.find]
+where = [&quot;src&quot;]
+
+[tool.ruff]
+line-length = 100
+target-version = &quot;py310&quot;
+
+[tool.pytest.ini_options]
+pythonpath = [&quot;src&quot;]
+testpaths = [&quot;tests&quot;]
+</pre>
+<h3>configs/default.yaml</h3>
+<pre>seed: 42
+output_dir: outputs/default
+
+data:
+  train_manifest: data/train.jsonl
+  val_manifest: data/val.jsonl
+  test_manifest: data/test.jsonl
+  image_root: .
+  max_caption_length: 96
+  num_workers: 4
+
+knowledge:
+  ontology_path: data/ontology/railway_terms.yaml
+  enforce_terms: true
+  hallucination_check: true
+
+model:
+  # Good starting point for a lightweight baseline. Replace with local models if offline.
+  vision_encoder: google/vit-base-patch16-224-in21k
+  text_decoder: distilgpt2
+  pretrained_vision_encoder_decoder: null
+  freeze_vision_encoder: false
+  use_lora: false
+  generation:
+    max_new_tokens: 80
+    num_beams: 3
+    no_repeat_ngram_size: 3
+
+train:
+  epochs: 3
+  batch_size: 8
+  learning_rate: 5.0e-5
+  weight_decay: 0.01
+  grad_accum_steps: 1
+  mixed_precision: true
+  log_every: 20
+  save_every_epoch: true
+
+distillation:
+  enabled: false
+  teacher_checkpoint: null
+  alpha_ce: 0.7
+  alpha_kl: 0.3
+  temperature: 2.0
+
+compression:
+  quantize_dynamic: false
+  export_onnx: false
+  onnx_path: outputs/default/model.onnx
+
+eval:
+  batch_size: 8
+  metrics:
+    - equipment_recall
+    - fault_f1
+    - risk_accuracy
+    - hallucination_rate
+</pre>
+<h3>tests/test_domain_metrics.py</h3>
+<pre>from railcap.data.schema import CaptionSample
+from railcap.knowledge.ontology import RailwayOntology
+from railcap.metrics.domain_metrics import compute_domain_metrics
+
+
+def test_compute_domain_metrics():
+    ontology = RailwayOntology(
+        equipment=(&quot;钢轨&quot;, &quot;扣件&quot;),
+        faults=(&quot;扣件松动&quot;,),
+        risks=(&quot;设备失效风险&quot;,),
+        aliases={},
+    )
+    samples = [
+        CaptionSample(
+            image=&quot;a.jpg&quot;,
+            caption=&quot;&quot;,
+            equipment=[&quot;钢轨&quot;, &quot;扣件&quot;],
+            faults=[&quot;扣件松动&quot;],
+            risks=[&quot;设备失效风险&quot;],
+        )
+    ]
+    metrics = compute_domain_metrics(samples, [&quot;钢轨和扣件可见，存在扣件松动和设备失效风险&quot;], ontology)
+
+    assert metrics.equipment_recall == 1.0
+    assert metrics.fault_f1 == 1.0
+    assert metrics.risk_accuracy == 1.0
+    assert metrics.hallucination_rate == 0.0
+</pre>
+<h3>tests/test_ontology.py</h3>
+<pre>from railcap.knowledge.ontology import RailwayOntology
+
+
+def test_extract_terms_with_aliases(tmp_path):
+    ontology_path = tmp_path / &quot;terms.yaml&quot;
+    ontology_path.write_text(
+        &quot;&quot;&quot;
+equipment:
+  - 钢轨
+faults:
+  - 异物侵限
+risks:
+  - 行车安全风险
+aliases:
+  钢轨:
+    - 铁轨
+  异物侵限:
+    - 异物侵入限界
+&quot;&quot;&quot;.strip(),
+        encoding=&quot;utf-8&quot;,
+    )
+    ontology = RailwayOntology.from_yaml(ontology_path)
+
+    assert ontology.extract_terms(&quot;铁轨旁存在异物侵入限界，可能造成行车安全风险&quot;) == {
+        &quot;钢轨&quot;,
+        &quot;异物侵限&quot;,
+        &quot;行车安全风险&quot;,
+    }
+</pre></body></html>

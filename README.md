@@ -85,3 +85,23 @@ tests/                    单元测试
 - 风险描述准确率
 - 铁路术语幻觉率
 - 参数量、显存、延迟、吞吐量
+
+<!-- codex-runtime-notes:start -->
+
+## Runtime Ports And Database Configuration
+
+### Database
+- No application database is used. Inputs and outputs are local JSONL, image, ontology, and experiment files.
+
+### Default Ports
+- No default web service or database port is defined.
+
+### Notes
+- Use local config files under `configs/` and CLI entry points from `pyproject.toml`.
+
+### Source Files Checked
+- `pyproject.toml`
+- `configs/default.yaml`
+- `README.md`
+
+<!-- codex-runtime-notes:end -->
